@@ -29,5 +29,11 @@ dependencies {
 }
 
 // Define the main class for the application
-mainClassName = 'Client'
+mainClassName = 'RQHell'
+
+run {
+    if (project.hasProperty("appArgs")) {
+        args Eval.me(appArgs)
+    }
+}
 

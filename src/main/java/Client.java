@@ -69,12 +69,13 @@ public class Client {
     }
 
     private boolean sendPacket(EncodingPacket pac) {
+        int numberOfSourceSymbols = pac.numberOfSymbols();
+        int encodingSymbolId = pac.encodingSymbolID();
+        int fecId = pac.fecPayloadID();
+        byte[] data = pac.asArray();
+        int size = data.length;
+        System.out.println(String.format("numberOfSourceSymbols: %d, encodingId: %d, fecId: %d, size: %d",
+                numberOfSourceSymbols, encodingSymbolId, fecId, size));
         return false;
-    }
-
-    public static void main(String[] args) {
-        String pathName = "D:\\code\\RQHell\\data\\data1";
-        Client client = new Client();
-        client.sendFile(pathName);
     }
 }
