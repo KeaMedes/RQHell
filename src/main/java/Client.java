@@ -11,16 +11,19 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.channels.SocketChannel;
+import java.nio.file.Path;
 
 public class Client {
     public Client() {}
 
-    public void sendFile(String pathName) {
-        File f = new File(pathName);
+    public void sendFile(Path path) {
+        File f = new File(path.toString());
         long fSize = f.length();
-        FECParameters fecParameters = FECParameters.deriveParameters(fSize, 1024, 1024 * 1024 * 10);
+        FECParameters fecParameters = FECParameters.deriveParameters(fSize, 1024, 1024 * 10);
         int symbolSize = fecParameters.symbolSize();
         int numSourceBlocks = fecParameters.numberOfSourceBlocks();
         System.out.println(String.format("file size: %d, symbol size: %d, number of source blocks: %d", fSize, symbolSize, numSourceBlocks));
@@ -65,7 +68,7 @@ public class Client {
     }
 
     private int numberOfRepairSymbols() {
-        return 10;
+        return 2;
     }
 
     private boolean sendPacket(EncodingPacket pac) {
@@ -77,5 +80,22 @@ public class Client {
         System.out.println(String.format("numberOfSourceSymbols: %d, encodingId: %d, fecId: %d, size: %d",
                 numberOfSourceSymbols, encodingSymbolId, fecId, size));
         return false;
+    }
+
+    public void establish(String hostAddr, int hostPort) {
+        SocketChannel sChannel = null;
+        try {
+            sChannel = SocketChannel.open();
+            sChannel.configureBlocking(false);
+            if (!sChannel.connect(new InetSocketAddress(hostAddr, hostPort))) {
+                while (!sChannel.finishConnect()) {
+                    System.out.print(".");
+                }
+            }
+            System.out.println();
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 }
