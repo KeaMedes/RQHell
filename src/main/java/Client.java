@@ -7,23 +7,42 @@ import net.fec.openrq.encoder.DataEncoder;
 import net.fec.openrq.encoder.SourceBlockEncoder;
 import net.fec.openrq.parameters.FECParameters;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
+import java.io.*;
 import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.file.Path;
 
 public class Client {
+    private Path mPath = null;
+    private ShareFEC mShareFEC;
+    private OutputStream mSocketOs = null;
+    private double mLostRate;
+
     public Client() {}
 
+    public void setFile(Path path) {
+        mPath = path;
+    }
+
     public void sendFile(Path path) {
-        File f = new File(path.toString());
+        Path targetPath = null;
+        if (path != null) {
+            targetPath = path;
+        } else if (mPath != null) {
+            targetPath = mPath;
+        } else {
+            System.out.println("Empty path");
+            return;
+        }
+        File f = new File(targetPath.toString());
         long fSize = f.length();
-        FECParameters fecParameters = FECParameters.deriveParameters(fSize, 1024, 1024 * 10);
+        mShareFEC = new ShareFEC();
+        mShareFEC.setFileSize(fSize);
+        FECParameters fecParameters = mShareFEC.getParameters();
+        System.out.println(mShareFEC.getPacketSize());
         int symbolSize = fecParameters.symbolSize();
         int numSourceBlocks = fecParameters.numberOfSourceBlocks();
         System.out.println(String.format("file size: %d, symbol size: %d, number of source blocks: %d", fSize, symbolSize, numSourceBlocks));
@@ -50,25 +69,28 @@ public class Client {
         DataEncoder encoder = OpenRQ.newEncoder(byteBuffer.array(), fecParameters);
         for (SourceBlockEncoder sourceBlockEncoder : encoder.sourceBlockIterable()) {
             int numberOfSourceSymbols = sourceBlockEncoder.numberOfSourceSymbols();
-            System.out.println(String.format("number of source symbols: %d", numberOfSourceSymbols));
-            long startTime = System.currentTimeMillis();
             for (EncodingPacket pac : sourceBlockEncoder.sourcePacketsIterable()) {
-                sendPacket(pac);
+                if (!sendPacket(pac)) {
+                    System.out.println("Fail to send source data packet");
+                    return;
+                }
+            }
+            int nr = numberOfRepairSymbols();
+            long startTime = System.currentTimeMillis();
+            for (EncodingPacket pac : sourceBlockEncoder.repairPacketsIterable(nr)) {
+                if (!sendPacket(pac)) {
+                    System.out.println("Fail to send repair packet");
+                    return;
+                }
             }
             long endTime = System.currentTimeMillis();
-            System.out.println(String.format("usd time : %d", endTime - startTime));
-            int nr = numberOfRepairSymbols();
-            startTime = System.currentTimeMillis();
-            for (EncodingPacket pac : sourceBlockEncoder.repairPacketsIterable(nr)) {
-                sendPacket(pac);
-            }
-            endTime = System.currentTimeMillis();
-            System.out.println(String.format("usd time : %d", endTime - startTime));
+            System.out.println(String.format("used time for %d repair symbols in %d source symbols: %d",
+                    endTime - startTime, nr, numberOfSourceSymbols));
         }
     }
 
     private int numberOfRepairSymbols() {
-        return 2;
+        return 10;
     }
 
     private boolean sendPacket(EncodingPacket pac) {
@@ -79,23 +101,33 @@ public class Client {
         int size = data.length;
         System.out.println(String.format("numberOfSourceSymbols: %d, encodingId: %d, fecId: %d, size: %d",
                 numberOfSourceSymbols, encodingSymbolId, fecId, size));
-        return false;
+        if (mSocketOs == null) {
+            System.out.println("Output Stream is not established");
+            return false;
+        }
+        try {
+            mSocketOs.write(pac.asArray());
+            return true;
+        } catch (IOException e) {
+            e.printStackTrace();
+            return false;
+        }
     }
 
     public void establish(String hostAddr, int hostPort) {
-        SocketChannel sChannel = null;
         try {
-            sChannel = SocketChannel.open();
-            sChannel.configureBlocking(false);
-            if (!sChannel.connect(new InetSocketAddress(hostAddr, hostPort))) {
-                while (!sChannel.finishConnect()) {
-                    System.out.print(".");
-                }
-            }
-            System.out.println();
-
+            Socket socket = new Socket(hostAddr, hostPort);
+            mSocketOs = socket.getOutputStream();
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    public double getLostRate() {
+        return mLostRate;
+    }
+
+    public void setLostRate(double mLostRate) {
+        this.mLostRate = mLostRate;
     }
 }
