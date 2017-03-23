@@ -3,19 +3,24 @@
  */
 import net.fec.openrq.EncodingPacket;
 import net.fec.openrq.OpenRQ;
+import net.fec.openrq.SymbolType;
 import net.fec.openrq.encoder.DataEncoder;
 import net.fec.openrq.encoder.SourceBlockEncoder;
 import net.fec.openrq.parameters.FECParameters;
+import net.fec.openrq.util.rq.SystematicIndices;
 
 import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.file.Path;
+import java.util.logging.Logger;
 
 public class Client {
+    private Logger LOG = Logger.getLogger("Client");
     private Path mPath = null;
     private ShareFEC mShareFEC;
     private OutputStream mSocketOs = null;
@@ -34,34 +39,42 @@ public class Client {
         } else if (mPath != null) {
             targetPath = mPath;
         } else {
-            System.out.println("Empty path");
+            LOG.severe("No file to be sent");
             return;
         }
         File f = new File(targetPath.toString());
+
+        LOG.info("Calculate the FECParameters");
         long fSize = f.length();
         mShareFEC = new ShareFEC();
         mShareFEC.setFileSize(fSize);
         FECParameters fecParameters = mShareFEC.getParameters();
+        ByteBuffer buffer = fecParameters.asBuffer();
+        System.out.println(buffer.limit());
         System.out.println(mShareFEC.getPacketSize());
         int symbolSize = fecParameters.symbolSize();
         int numSourceBlocks = fecParameters.numberOfSourceBlocks();
-        System.out.println(String.format("file size: %d, symbol size: %d, number of source blocks: %d", fSize, symbolSize, numSourceBlocks));
+        LOG.info(String.format("Final FECParameters: file size: %d, symbol size: %d, number of source blocks: %d", fSize, symbolSize, numSourceBlocks));
 
-        FileInputStream fin = null;
+        LOG.info("Loading file to memory");
+        ByteBuffer byteBuffer;
         try {
-            fin = new FileInputStream(f);
+            FileInputStream fin = new FileInputStream(f);
+            FileChannel fileChannel = fin.getChannel();
+            byteBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0, fSize);
         } catch (FileNotFoundException e) {
-            e.printStackTrace();
+            LOG.severe("File not found");
+            return;
+        } catch (IOException e) {
+            LOG.severe("Error while mapping the file into memory");
             return;
         }
+        LOG.info("Success in mapping the file inot memory");
 
-        FileChannel fileChannel = fin.getChannel();
-        ByteBuffer byteBuffer = ByteBuffer.allocate((int) fSize);
+        LOG.info("Send the fecParameters to the server");
+        ByteBuffer fecBuffer = fecParameters.asBuffer();
         try {
-            if (fileChannel.read(byteBuffer) != fSize) {
-                System.out.println("fail to read enough data");
-                return;
-            }
+            mSocketOs.write(fecBuffer.array());
         } catch (IOException e) {
             e.printStackTrace();
         }

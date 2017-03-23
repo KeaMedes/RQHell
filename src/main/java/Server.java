@@ -4,88 +4,108 @@ import net.fec.openrq.Parsed;
 import net.fec.openrq.decoder.DataDecoder;
 import net.fec.openrq.decoder.SourceBlockDecoder;
 import net.fec.openrq.parameters.FECParameters;
+import net.fec.openrq.util.datatype.SizeOf;
 
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
+import java.util.logging.Logger;
 
 /**
  * Created by luoy on 2/27/2017.
  */
 public class Server {
+    private static Logger LOG = Logger.getLogger("Server");
     private Socket mSocket = null;
     private InputStream mSocketIs = null;
-    private Path mFilePath = null;
-    private ShareFEC mShareFEC = null;
     public Server() {}
 
-    public void receiveFile() {
-        System.out.println("Start receive file");
-        mShareFEC = new ShareFEC();
-        if (mShareFEC.setFileSize(mFilePath) == -1) {
-            System.out.println("Fail to load file");
-            return;
-        }
-        FECParameters fecParameters = mShareFEC.getParameters();
-        DataDecoder decoder = OpenRQ.newDecoder(fecParameters, 2);
+
+    public void run() {
+        LOG.info("Server start to run");
+
+        LOG.info("wait for bytes to get fecParameters");
+        byte[] fecParameterBuffer = new byte[12];
+        int fecParameterBufferSize = 0;
         while (true) {
-            byte[] data = null;
             try {
-                data = getData(mSocketIs);
+                fecParameterBufferSize += mSocketIs.read(fecParameterBuffer, fecParameterBufferSize, 12);
+                if (fecParameterBufferSize == 12) {
+                    LOG.info("Get 12 bytes for fecParamters");
+                    break;
+                } else {
+                    LOG.info(String.format("Read %d bytes, not enough", fecParameterBufferSize));
+                }
             } catch (IOException e) {
                 e.printStackTrace();
+                LOG.severe("Fail to get bytes for fecParameters");
                 return;
             }
-            if (data.length == 0) {
-                return;
+        }
+
+        LOG.info("Decode the 12 bytes into fecParameters");
+        Parsed<FECParameters> parsedFecParameters = FECParameters.parse(fecParameterBuffer);
+        FECParameters fecParameters = null;
+        if (parsedFecParameters.isValid()) {
+            fecParameters = parsedFecParameters.value();
+            LOG.info(String.format("Success to decode the fecParameters, data len: %d, block num: %d",
+                    fecParameters.dataLength(), fecParameters.numberOfSourceBlocks()));
+        } else {
+            LOG.severe(String.format("Fail to decode the fecParameters, reason: %s", parsedFecParameters.failureReason()));
+            return;
+        }
+
+        LOG.info("Start to receive packets");
+        DataDecoder decoder = OpenRQ.newDecoder(fecParameters, 2);
+        int packetSize = fecParameters.symbolSize() + SizeOf.INT * 2;
+        byte[] buffer = new byte[packetSize];
+        while (true) {
+            int bufferLen = 0;
+            while (true) {
+                try {
+                    bufferLen += mSocketIs.read(buffer, bufferLen, packetSize);
+                    if (bufferLen < packetSize) {
+                        LOG.info(String.format("Fail to get a full packet, current size: %d", bufferLen));
+                    } else {
+                        LOG.info("Get a full packet");
+                        break;
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
-            Parsed<EncodingPacket> parsedEncodingPacket = decoder.parsePacket(data, false);
+            Parsed<EncodingPacket> parsedEncodingPacket = decoder.parsePacket(buffer, false);
             if (!parsedEncodingPacket.isValid()) {
-                System.out.println("Fail to parse packet, reason: " + parsedEncodingPacket.failureReason());
+                LOG.severe("Fail to parse packet, reason: " + parsedEncodingPacket.failureReason());
+                return;
             }
             EncodingPacket encodingPacket = parsedEncodingPacket.value();
+            LOG.info(String.format("Success to decode a packet, belong to block: %d", encodingPacket.sourceBlockNumber()));
             SourceBlockDecoder sourceBlockDecoder = decoder.sourceBlock(encodingPacket.sourceBlockNumber());
             sourceBlockDecoder.putEncodingPacket(encodingPacket);
             if (sourceBlockDecoder.isSourceBlockDecoded()) {
-                System.out.println(String.format("Block %d is decoded", sourceBlockDecoder.sourceBlockNumber()));
+                LOG.info(String.format("Block %d is decoded", sourceBlockDecoder.sourceBlockNumber()));
+            }
+            if (decoder.isDataDecoded()) {
+                LOG.info("Data is decodable, done!");
+                break;
             }
         }
     }
 
-    private byte[] getData(InputStream inputStream) throws IOException {
-        int packetSize = mShareFEC.getPacketSize();
-        if (packetSize == -1) {
-            System.out.println("Packet size unknown");
-            return new byte[0];
-        }
-        int size = -1;
-        byte[] buffer = new byte[packetSize];
-        while (true) {
-            size = inputStream.read(buffer);
-            if (size != packetSize) {
-                System.out.println(size);
-                return new byte[0];
-            }
-            break;
-        }
-        return buffer;
-    }
 
     public void establish(int hostPort) {
         try {
             ServerSocket serverSocket = new ServerSocket(hostPort);
-            System.out.println("Listening");
+            LOG.info("Listening");
             mSocket = serverSocket.accept();
             mSocketIs = mSocket.getInputStream();
-            System.out.println("Receive connection");
+            LOG.info("Receive connection");
         } catch (IOException e) {
             e.printStackTrace();
             mSocket = null;
         }
-    }
-
-    public void setFile(Path file) {
-        this.mFilePath = file;
     }
 }
