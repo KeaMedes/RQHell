@@ -26,6 +26,7 @@ public class Client {
     private OutputStream mSocketOs = null;
     private InputStream mSocketIs = null;
     private double mLostRate;
+    private Profiler mProfiler = new Profiler();
 
     public Client() {}
 
@@ -46,15 +47,18 @@ public class Client {
         File f = new File(targetPath.toString());
 
         LOG.info("Calculate the FECParameters");
+        mProfiler.clientCalculateFECStart();
         long fSize = f.length();
         mShareFEC = new ShareFEC();
         mShareFEC.setFileSize(fSize);
         FECParameters fecParameters = mShareFEC.getParameters();
+        mProfiler.clientCalculateFECSTop();
         int symbolSize = fecParameters.symbolSize();
         int numSourceBlocks = fecParameters.numberOfSourceBlocks();
         LOG.info(String.format("Final FECParameters: file size: %d, symbol size: %d, number of source blocks: %d", fSize, symbolSize, numSourceBlocks));
 
         LOG.info("Loading file to memory");
+        mProfiler.clientLoadFileStart();
         ByteBuffer byteBuffer;
         try {
             FileInputStream fin = new FileInputStream(f);
@@ -66,21 +70,25 @@ public class Client {
             LOG.severe("File not found");
             return;
         } catch (IOException e) {
-            LOG.severe("Error while mapping the file into memory");
+            LOG.severe("Error while loading the file into memory");
             return;
         }
-        LOG.info("Success in mapping the file inot memory");
+        mProfiler.clientLoadFileStop();
+        LOG.info("Success in loading the file inot memory");
 
         LOG.info("Send the fecParameters to the server");
         ByteBuffer fecBuffer = fecParameters.asBuffer();
         int state = 0;
         try {
+            mProfiler.clientSendFECStart();
             mSocketOs.write(fecBuffer.array());
+            mProfiler.clientSendFECStop();
             LOG.info("Wait for the response of the server");
             state = 1;
             // 2-bytes: OK
             byte[] buf = new byte[2];
             int bufLen = 0;
+            mProfiler.clientGetResponseStart();
             while (true) {
                 bufLen += mSocketIs.read(buf, bufLen, 2);
                 if (bufLen == 2) {
@@ -98,6 +106,7 @@ public class Client {
                 LOG.info("Server fail to receive the fecParameters");
                 return;
             }
+            mProfiler.clientGetResponseStop();
         } catch (IOException e) {
             if (state == 0) {
                 LOG.severe("Fail to send the fecParameters to server");
@@ -107,7 +116,9 @@ public class Client {
             return;
         }
 
+        mProfiler.clientPartitionDataStart();
         DataEncoder encoder = OpenRQ.newEncoder(byteBuffer.array(), fecParameters);
+        mProfiler.clientPartitionDataStop();
         long startTime = System.currentTimeMillis();
         for (SourceBlockEncoder sourceBlockEncoder : encoder.sourceBlockIterable()) {
             LOG.info(String.format("Sending block: %d", sourceBlockEncoder.sourceBlockNumber()));
@@ -125,6 +136,7 @@ public class Client {
         }
         long endTime = System.currentTimeMillis();
         LOG.info(String.format("Send the data with %d ms", endTime - startTime));
+        mProfiler.show();
     }
 
     private int numberOfRepairSymbols() {
