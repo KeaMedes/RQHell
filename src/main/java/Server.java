@@ -20,6 +20,7 @@ public class Server {
     private static Logger LOG = Logger.getLogger("Server");
     private Socket mSocket = null;
     private InputStream mSocketIs = null;
+    private OutputStream mSocketOs = null;
     public Server() {}
 
 
@@ -57,6 +58,15 @@ public class Server {
             return;
         }
 
+        LOG.info("Response to the client");
+        byte[] buf = "OK".getBytes();
+        try {
+            mSocketOs.write(buf);
+            LOG.info("Success send the response");
+        } catch (IOException e) {
+            LOG.severe("Fail to send the response");
+        }
+
         LOG.info("Start to receive packets");
         DataDecoder decoder = OpenRQ.newDecoder(fecParameters, 2);
         int packetSize = fecParameters.symbolSize() + SizeOf.INT * 2;
@@ -65,7 +75,12 @@ public class Server {
             int bufferLen = 0;
             while (true) {
                 try {
-                    bufferLen += mSocketIs.read(buffer, bufferLen, packetSize);
+                    int ret = mSocketIs.read(buffer, bufferLen, packetSize);
+                    if (ret <= 0) {
+                        LOG.info("No data to receive");
+                        return;
+                    }
+                    bufferLen += ret;
                     if (bufferLen < packetSize) {
                         LOG.info(String.format("Fail to get a full packet, current size: %d", bufferLen));
                     } else {
@@ -102,6 +117,7 @@ public class Server {
             LOG.info("Listening");
             mSocket = serverSocket.accept();
             mSocketIs = mSocket.getInputStream();
+            mSocketOs = mSocket.getOutputStream();
             LOG.info("Receive connection");
         } catch (IOException e) {
             e.printStackTrace();

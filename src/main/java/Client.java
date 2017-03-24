@@ -24,6 +24,7 @@ public class Client {
     private Path mPath = null;
     private ShareFEC mShareFEC;
     private OutputStream mSocketOs = null;
+    private InputStream mSocketIs = null;
     private double mLostRate;
 
     public Client() {}
@@ -49,9 +50,6 @@ public class Client {
         mShareFEC = new ShareFEC();
         mShareFEC.setFileSize(fSize);
         FECParameters fecParameters = mShareFEC.getParameters();
-        ByteBuffer buffer = fecParameters.asBuffer();
-        System.out.println(buffer.limit());
-        System.out.println(mShareFEC.getPacketSize());
         int symbolSize = fecParameters.symbolSize();
         int numSourceBlocks = fecParameters.numberOfSourceBlocks();
         LOG.info(String.format("Final FECParameters: file size: %d, symbol size: %d, number of source blocks: %d", fSize, symbolSize, numSourceBlocks));
@@ -61,7 +59,9 @@ public class Client {
         try {
             FileInputStream fin = new FileInputStream(f);
             FileChannel fileChannel = fin.getChannel();
-            byteBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0, fSize);
+            byte[] array = new byte[(int)f.length()];
+            byteBuffer = ByteBuffer.wrap(array);
+            fileChannel.read(byteBuffer);
         } catch (FileNotFoundException e) {
             LOG.severe("File not found");
             return;
@@ -73,33 +73,58 @@ public class Client {
 
         LOG.info("Send the fecParameters to the server");
         ByteBuffer fecBuffer = fecParameters.asBuffer();
+        int state = 0;
         try {
             mSocketOs.write(fecBuffer.array());
+            LOG.info("Wait for the response of the server");
+            state = 1;
+            // 2-bytes: OK
+            byte[] buf = new byte[2];
+            int bufLen = 0;
+            while (true) {
+                bufLen += mSocketIs.read(buf, bufLen, 2);
+                if (bufLen == 2) {
+                    LOG.info("Success reading from server the response");
+                    break;
+                } else {
+                    LOG.info(String.format("Reading part of the server response, length: %d", bufLen));
+                }
+            }
+            state = 2;
+            String response = new String(buf);
+            if ("OK".equals(response)) {
+                LOG.info("Server has receive the fecParameters");
+            } else {
+                LOG.info("Server fail to receive the fecParameters");
+                return;
+            }
         } catch (IOException e) {
-            e.printStackTrace();
+            if (state == 0) {
+                LOG.severe("Fail to send the fecParameters to server");
+            } else {
+                LOG.severe("Fail to receive the response from the server");
+            }
+            return;
         }
 
         DataEncoder encoder = OpenRQ.newEncoder(byteBuffer.array(), fecParameters);
+        long startTime = System.currentTimeMillis();
         for (SourceBlockEncoder sourceBlockEncoder : encoder.sourceBlockIterable()) {
-            int numberOfSourceSymbols = sourceBlockEncoder.numberOfSourceSymbols();
+            LOG.info(String.format("Sending block: %d", sourceBlockEncoder.sourceBlockNumber()));
             for (EncodingPacket pac : sourceBlockEncoder.sourcePacketsIterable()) {
                 if (!sendPacket(pac)) {
-                    System.out.println("Fail to send source data packet");
                     return;
                 }
             }
             int nr = numberOfRepairSymbols();
-            long startTime = System.currentTimeMillis();
             for (EncodingPacket pac : sourceBlockEncoder.repairPacketsIterable(nr)) {
                 if (!sendPacket(pac)) {
-                    System.out.println("Fail to send repair packet");
                     return;
                 }
             }
-            long endTime = System.currentTimeMillis();
-            System.out.println(String.format("used time for %d repair symbols in %d source symbols: %d",
-                    endTime - startTime, nr, numberOfSourceSymbols));
         }
+        long endTime = System.currentTimeMillis();
+        LOG.info(String.format("Send the data with %d ms", endTime - startTime));
     }
 
     private int numberOfRepairSymbols() {
@@ -107,22 +132,12 @@ public class Client {
     }
 
     private boolean sendPacket(EncodingPacket pac) {
-        int numberOfSourceSymbols = pac.numberOfSymbols();
-        int encodingSymbolId = pac.encodingSymbolID();
-        int fecId = pac.fecPayloadID();
-        byte[] data = pac.asArray();
-        int size = data.length;
-        System.out.println(String.format("numberOfSourceSymbols: %d, encodingId: %d, fecId: %d, size: %d",
-                numberOfSourceSymbols, encodingSymbolId, fecId, size));
-        if (mSocketOs == null) {
-            System.out.println("Output Stream is not established");
-            return false;
-        }
         try {
             mSocketOs.write(pac.asArray());
             return true;
         } catch (IOException e) {
             e.printStackTrace();
+            LOG.severe(String.format("Fail to send packet: %d", pac.encodingSymbolID()));
             return false;
         }
     }
@@ -131,6 +146,7 @@ public class Client {
         try {
             Socket socket = new Socket(hostAddr, hostPort);
             mSocketOs = socket.getOutputStream();
+            mSocketIs = socket.getInputStream();
         } catch (IOException e) {
             e.printStackTrace();
         }
