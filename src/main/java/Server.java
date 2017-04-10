@@ -21,6 +21,7 @@ public class Server {
     private Socket mSocket = null;
     private InputStream mSocketIs = null;
     private OutputStream mSocketOs = null;
+    private ServerProfiler mProfiler = new ServerProfiler();
     public Server() {}
 
 
@@ -33,6 +34,7 @@ public class Server {
         while (true) {
             try {
                 fecParameterBufferSize += mSocketIs.read(fecParameterBuffer, fecParameterBufferSize, 12);
+
                 if (fecParameterBufferSize == 12) {
                     LOG.info("Get 12 bytes for fecParamters");
                     break;

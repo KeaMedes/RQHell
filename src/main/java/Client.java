@@ -3,19 +3,14 @@
  */
 import net.fec.openrq.EncodingPacket;
 import net.fec.openrq.OpenRQ;
-import net.fec.openrq.SymbolType;
 import net.fec.openrq.encoder.DataEncoder;
 import net.fec.openrq.encoder.SourceBlockEncoder;
 import net.fec.openrq.parameters.FECParameters;
-import net.fec.openrq.util.rq.SystematicIndices;
 
 import java.io.*;
-import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.channels.SocketChannel;
 import java.nio.file.Path;
 import java.util.logging.Logger;
 
@@ -26,7 +21,7 @@ public class Client {
     private OutputStream mSocketOs = null;
     private InputStream mSocketIs = null;
     private double mLostRate;
-    private Profiler mProfiler = new Profiler();
+    private ClientProfiler mClientProfiler = new ClientProfiler();
 
     public Client() {}
 
@@ -47,18 +42,18 @@ public class Client {
         File f = new File(targetPath.toString());
 
         LOG.info("Calculate the FECParameters");
-        mProfiler.clientCalculateFECStart();
+        mClientProfiler.clientCalculateFECStart();
         long fSize = f.length();
         mShareFEC = new ShareFEC();
         mShareFEC.setFileSize(fSize);
         FECParameters fecParameters = mShareFEC.getParameters();
-        mProfiler.clientCalculateFECSTop();
+        mClientProfiler.clientCalculateFECSTop();
         int symbolSize = fecParameters.symbolSize();
         int numSourceBlocks = fecParameters.numberOfSourceBlocks();
         LOG.info(String.format("Final FECParameters: file size: %d, symbol size: %d, number of source blocks: %d", fSize, symbolSize, numSourceBlocks));
 
         LOG.info("Loading file to memory");
-        mProfiler.clientLoadFileStart();
+        mClientProfiler.clientLoadFileStart();
         ByteBuffer byteBuffer;
         try {
             FileInputStream fin = new FileInputStream(f);
@@ -73,22 +68,22 @@ public class Client {
             LOG.severe("Error while loading the file into memory");
             return;
         }
-        mProfiler.clientLoadFileStop();
+        mClientProfiler.clientLoadFileStop();
         LOG.info("Success in loading the file inot memory");
 
         LOG.info("Send the fecParameters to the server");
         ByteBuffer fecBuffer = fecParameters.asBuffer();
         int state = 0;
         try {
-            mProfiler.clientSendFECStart();
+            mClientProfiler.clientSendFECStart();
             mSocketOs.write(fecBuffer.array());
-            mProfiler.clientSendFECStop();
+            mClientProfiler.clientSendFECStop();
             LOG.info("Wait for the response of the server");
             state = 1;
             // 2-bytes: OK
             byte[] buf = new byte[2];
             int bufLen = 0;
-            mProfiler.clientGetResponseStart();
+            mClientProfiler.clientGetResponseStart();
             while (true) {
                 bufLen += mSocketIs.read(buf, bufLen, 2);
                 if (bufLen == 2) {
@@ -106,7 +101,7 @@ public class Client {
                 LOG.info("Server fail to receive the fecParameters");
                 return;
             }
-            mProfiler.clientGetResponseStop();
+            mClientProfiler.clientGetResponseStop();
         } catch (IOException e) {
             if (state == 0) {
                 LOG.severe("Fail to send the fecParameters to server");
@@ -116,27 +111,43 @@ public class Client {
             return;
         }
 
-        mProfiler.clientPartitionDataStart();
+        mClientProfiler.clientPartitionDataStart();
         DataEncoder encoder = OpenRQ.newEncoder(byteBuffer.array(), fecParameters);
-        mProfiler.clientPartitionDataStop();
+        mClientProfiler.clientPartitionDataStop();
         long startTime = System.currentTimeMillis();
         for (SourceBlockEncoder sourceBlockEncoder : encoder.sourceBlockIterable()) {
-            LOG.info(String.format("Sending block: %d", sourceBlockEncoder.sourceBlockNumber()));
+//            LOG.info(String.format("Sending block: %d", sourceBlockEncoder.sourceBlockNumber()));
+            mClientProfiler.clientPacketEncodeSourceStart();
+            int i = 0;
+            int size = sourceBlockEncoder.numberOfSourceSymbols();
             for (EncodingPacket pac : sourceBlockEncoder.sourcePacketsIterable()) {
+                mClientProfiler.clientPacketEncodeSourceStop();
                 if (!sendPacket(pac)) {
                     return;
                 }
+                i ++;
+                if (i < size) {
+                    mClientProfiler.clientPacketEncodeSourceStart();
+                }
             }
             int nr = numberOfRepairSymbols();
+            i = 0;
+            size = nr;
+            mClientProfiler.clientPacketEncodeRepariStart();
             for (EncodingPacket pac : sourceBlockEncoder.repairPacketsIterable(nr)) {
+                mClientProfiler.clientPacketEncodeRepariStop();
                 if (!sendPacket(pac)) {
                     return;
+                }
+                i ++;
+                if (i < size) {
+                    mClientProfiler.clientPacketEncodeRepariStart();
                 }
             }
         }
         long endTime = System.currentTimeMillis();
         LOG.info(String.format("Send the data with %d ms", endTime - startTime));
-        mProfiler.show();
+        mClientProfiler.show();
     }
 
     private int numberOfRepairSymbols() {
